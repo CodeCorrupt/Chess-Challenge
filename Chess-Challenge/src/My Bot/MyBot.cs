@@ -13,10 +13,12 @@ public class MyBot : IChessBot
         Move[] moves = board.GetLegalMoves();
         Move bestMove = moves[0];
         float bestScore = float.MinValue;
+        int depth = 4;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < moves.Length; i++)
         {
             board.MakeMove(moves[i]);
-            float val = AlphaBetaHard(board, 3, float.MinValue, float.MaxValue, playerIsWhite);
+            float val = AlphaBeta(board, depth, float.MinValue, float.MaxValue, playerIsWhite);
             board.UndoMove(moves[i]);
             if (val > bestScore)
             {
@@ -24,51 +26,66 @@ public class MyBot : IChessBot
                 bestMove = moves[i];
             }
         }
-        Console.WriteLine("Best score: " + bestScore + " for " + bestMove.ToString());
+        watch.Stop();
+        Console.WriteLine($"Took {watch.ElapsedMilliseconds,5} ms for depth {depth,2} - Best score: {bestScore}");
         return bestMove;
     }
 
-    private float AlphaBetaHard(Board board, int depth, float a, float b, bool playerIsWhite)
+    private float AlphaBeta(Board board, int depth, float a, float b, bool playerIsWhite)
     {
         if (depth == 0)
         {
             return GetBoardScore(board, playerIsWhite);
         }
-        Move[] moves = board.GetLegalMoves();
+        Move[] allMoves = board.GetLegalMoves();
+        Move[] orderedMoves = allMoves.OrderByDescending(move => GetMoveScore(board, move)).ToArray();
         if (playerIsWhite == board.IsWhiteToMove)
         {
             float val = float.MinValue;
-            for (int i = 0; i < moves.Length; i++)
+            for (int i = 0; i < orderedMoves.Length; i++)
             {
-                board.MakeMove(moves[i]);
-                val = Math.Max(val, AlphaBetaHard(board, depth - 1, a, b, playerIsWhite));
-                board.UndoMove(moves[i]);
-                if (val > b)
+                board.MakeMove(orderedMoves[i]);
+                val = Math.Max(val, AlphaBeta(board, depth - 1, a, b, playerIsWhite));
+                board.UndoMove(orderedMoves[i]);
+                a = Math.Max(a, val);
+                if (b <= a)
                 {
                     break;
                 }
-                a = Math.Max(a, val);
             }
             return val;
         }
         else
         {
             float val = float.MaxValue;
-            for (int i = 0; i < moves.Length; i++)
+            for (int i = 0; i < orderedMoves.Length; i++)
             {
-                board.MakeMove(moves[i]);
-                val = Math.Min(val, AlphaBetaHard(board, depth - 1, a, b, playerIsWhite));
-                board.UndoMove(moves[i]);
-                if (val < a)
+                board.MakeMove(orderedMoves[i]);
+                val = Math.Min(val, AlphaBeta(board, depth - 1, a, b, playerIsWhite));
+                board.UndoMove(orderedMoves[i]);
+                b = Math.Min(b, val);
+                if (b <= a)
                 {
                     break;
                 }
-                b = Math.Min(b, val);
             }
             return val;
         }
     }
 
+    private float GetMoveScore(Board board, Move move)
+    {
+        float score = 0;
+        if (move.IsCapture)
+        {
+            score += GetPieceScore(move.CapturePieceType);
+        }
+        if (move.IsPromotion)
+        {
+            score += GetPieceScore(move.PromotionPieceType);
+        }
+        return score;
+    }
     private float GetBoardScore(Board board, bool playerIsWhite)
     {
         if (boardScores.ContainsKey(board.ZobristKey))
