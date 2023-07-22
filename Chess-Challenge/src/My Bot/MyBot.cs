@@ -9,16 +9,20 @@ public class MyBot : IChessBot
     Dictionary<ulong, float> boardScores = new();
     public Move Think(Board board, Timer timer)
     {
-        bool playerIsWhite = board.IsWhiteToMove;
+        Move bestMove = SearchRoot(board, 5);
+        return bestMove;
+    }
+
+    private Move SearchRoot(Board board, int depth)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
         Move[] moves = board.GetLegalMoves();
         Move bestMove = moves[0];
         float bestScore = float.MinValue;
-        int depth = 4;
-        var watch = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < moves.Length; i++)
         {
             board.MakeMove(moves[i]);
-            float val = AlphaBeta(board, depth, float.MinValue, float.MaxValue, playerIsWhite);
+            float val = -AlphaBetaNegamax(board, depth - 1, float.MinValue, -bestScore);
             board.UndoMove(moves[i]);
             if (val > bestScore)
             {
@@ -30,47 +34,34 @@ public class MyBot : IChessBot
         Console.WriteLine($"Took {watch.ElapsedMilliseconds,5} ms for depth {depth,2} - Best score: {bestScore}");
         return bestMove;
     }
-
-    private float AlphaBeta(Board board, int depth, float a, float b, bool playerIsWhite)
+    private float AlphaBetaNegamax(Board board, int depth, float a, float b)
     {
         if (depth == 0)
         {
-            return GetBoardScore(board, playerIsWhite);
+            return GetBoardScore(board);
         }
         Move[] allMoves = board.GetLegalMoves();
+        if (allMoves.Length == 0)
+        {
+            if (board.IsInCheck())
+            {
+                return float.MinValue;
+            }
+            return 0;
+        }
         Move[] orderedMoves = allMoves.OrderByDescending(move => GetMoveScore(board, move)).ToArray();
-        if (playerIsWhite == board.IsWhiteToMove)
+        for (int i = 0; i < orderedMoves.Length; i++)
         {
-            float val = float.MinValue;
-            for (int i = 0; i < orderedMoves.Length; i++)
+            board.MakeMove(orderedMoves[i]);
+            float val = -AlphaBetaNegamax(board, depth - 1, -b, -a);
+            board.UndoMove(orderedMoves[i]);
+            if (val >= b)
             {
-                board.MakeMove(orderedMoves[i]);
-                val = Math.Max(val, AlphaBeta(board, depth - 1, a, b, playerIsWhite));
-                board.UndoMove(orderedMoves[i]);
-                a = Math.Max(a, val);
-                if (b <= a)
-                {
-                    break;
-                }
+                return b;
             }
-            return val;
+            a = Math.Max(val, a);
         }
-        else
-        {
-            float val = float.MaxValue;
-            for (int i = 0; i < orderedMoves.Length; i++)
-            {
-                board.MakeMove(orderedMoves[i]);
-                val = Math.Min(val, AlphaBeta(board, depth - 1, a, b, playerIsWhite));
-                board.UndoMove(orderedMoves[i]);
-                b = Math.Min(b, val);
-                if (b <= a)
-                {
-                    break;
-                }
-            }
-            return val;
-        }
+        return a;
     }
 
     private float GetMoveScore(Board board, Move move)
@@ -78,7 +69,8 @@ public class MyBot : IChessBot
         float score = 0;
         if (move.IsCapture)
         {
-            score += GetPieceScore(move.CapturePieceType);
+            // Prioritize capturing higher value pieces with lower value pieces
+            score += 10 * GetPieceScore(move.CapturePieceType) - GetPieceScore(move.MovePieceType);
         }
         if (move.IsPromotion)
         {
@@ -86,30 +78,34 @@ public class MyBot : IChessBot
         }
         return score;
     }
-    private float GetBoardScore(Board board, bool playerIsWhite)
+    // Score from the perspective of the player who's turn it is
+    private float GetBoardScore(Board board)
     {
         if (boardScores.ContainsKey(board.ZobristKey))
         {
             return boardScores[board.ZobristKey];
         }
         float score = 0;
-        Square enemyKing = board.GetKingSquare(!playerIsWhite);
-        PieceList[] pieceLists = board.GetAllPieceLists();
-        for (int i = 0; i < pieceLists.Length; i++)
-        {
-            int factor = -1;
-            bool pieceIsWhite = i < 6;
-            if (pieceIsWhite == playerIsWhite)
-            {
-                factor = 1;
-            }
-            score += factor * GetPieceScore(pieceLists[i].TypeOfPieceInList) * pieceLists[i].Count;
-            for (int j = 0; j < pieceLists[i].Count; j++)
-            {
-                score -= (factor * (float)getDist(pieceLists[i][j].Square, enemyKing)) / 1000;
-            }
-        }
+        float whiteScore = GetBoardScore(board, true);
+        float blackScore = GetBoardScore(board, false);
+        float eval = whiteScore - blackScore;
+        int perspective = board.IsWhiteToMove ? 1 : -1;
+        score += perspective * eval;
         boardScores[board.ZobristKey] = score;
+        return score;
+    }
+
+    private float GetBoardScore(Board board, Boolean isWhite)
+    {
+        float score = 0;
+        // Ger piece scores
+        PieceList[] pieceLists = isWhite ? board.GetAllPieceLists().Take(6).ToArray() : board.GetAllPieceLists().Skip(6).ToArray();
+        score += pieceLists.Sum(pieceList => GetPieceScore(pieceList.TypeOfPieceInList) * pieceList.Count);
+
+        // Enemy King cornered score
+        Square enemyKing = board.GetKingSquare(!isWhite);
+        score += 2 * (float)getDist(enemyKing, new Square(3, 3));
+
         return score;
     }
 
