@@ -76,6 +76,7 @@ public class MyBot : IChessBot
             return boardScores[board.ZobristKey];
         }
         float score = 0;
+        Square enemyKing = board.GetKingSquare(!playerIsWhite);
         PieceList[] pieceLists = board.GetAllPieceLists();
         for (int i = 0; i < pieceLists.Length; i++)
         {
@@ -85,11 +86,19 @@ public class MyBot : IChessBot
             {
                 factor = 1;
             }
-            float s = factor * GetPieceScore(pieceLists[i].TypeOfPieceInList) * pieceLists[i].Count;
-            score += s;
+            score += factor * GetPieceScore(pieceLists[i].TypeOfPieceInList) * pieceLists[i].Count;
+            for (int j = 0; j < pieceLists[i].Count; j++)
+            {
+                score -= (factor * (float)getDist(pieceLists[i][j].Square, enemyKing)) / 1000;
+            }
         }
         boardScores[board.ZobristKey] = score;
         return score;
+    }
+
+    private double getDist(Square s1, Square s2)
+    {
+        return Math.Sqrt(Math.Pow(s1.File - s2.File, 2) + Math.Pow(s1.Rank - s2.Rank, 2));
     }
 
     private float GetPieceScore(PieceType pieceType)
