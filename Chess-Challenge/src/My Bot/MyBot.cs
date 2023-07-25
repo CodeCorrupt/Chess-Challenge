@@ -38,23 +38,40 @@ public class MyBot : IChessBot
     {
         if (depth == 0)
         {
-            return GetBoardScore(board);
+            return SearchCaptures(board, a, b);
         }
         Move[] allMoves = board.GetLegalMoves();
-        if (allMoves.Length == 0)
-        {
-            if (board.IsInCheck())
-            {
-                return float.MinValue;
-            }
-            return 0;
-        }
         Move[] orderedMoves = allMoves.OrderByDescending(move => GetMoveScore(board, move)).ToArray();
         for (int i = 0; i < orderedMoves.Length; i++)
         {
             board.MakeMove(orderedMoves[i]);
             float val = -AlphaBetaNegamax(board, depth - 1, -b, -a);
             board.UndoMove(orderedMoves[i]);
+            if (val >= b)
+            {
+                return b;
+            }
+            a = Math.Max(val, a);
+        }
+        return a;
+    }
+
+    private float SearchCaptures(Board board, float a, float b)
+    {
+        float val = GetBoardScore(board);
+        if (val >= b)
+        {
+            return b;
+        }
+        a = Math.Max(val, a);
+
+        Move[] captureMoves = board.GetLegalMoves(true);
+        Move[] orderedCaptures = captureMoves.OrderByDescending(move => GetMoveScore(board, move)).ToArray();
+        for (int i = 0; i < orderedCaptures.Length; i++)
+        {
+            board.MakeMove(orderedCaptures[i]);
+            val = -SearchCaptures(board, -b, -a);
+            board.UndoMove(orderedCaptures[i]);
             if (val >= b)
             {
                 return b;
@@ -105,6 +122,16 @@ public class MyBot : IChessBot
         // Enemy King cornered score
         Square enemyKing = board.GetKingSquare(!isWhite);
         score += 2 * (float)getDist(enemyKing, new Square(3, 3));
+
+        // Check if in check
+        if (board.IsInCheck())
+        {
+            score += (board.IsWhiteToMove == isWhite) ? -10000 : 10000;
+        }
+
+        // Move pawns up
+        PieceList pawnLists = board.GetPieceList(PieceType.Pawn, isWhite);
+        score += pawnLists.Sum(pawn => isWhite ? pawn.Square.File : 7 - pawn.Square.File);
 
         return score;
     }
