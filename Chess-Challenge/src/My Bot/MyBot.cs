@@ -6,84 +6,32 @@ using System.Collections.Generic;
 
 public class MyBot : IChessBot
 {
-    Dictionary<ulong, float> boardScores = new();
-    public Move Think(Board board, Timer timer)
+    Dictionary<ulong, int> boardScores = new();
+    Move bestRootMove;
+    bool useQuiescence = true;
+    int rootPositionsSearched;
+    int quiescencePositionsSearched;
+
+    private bool IsOutOfTime(Timer timer)
     {
-        Move bestMove = SearchRoot(board, 5);
-        return bestMove;
+        return timer.MillisecondsElapsedThisTurn >= timer.MillisecondsRemaining / 30;
     }
 
-    private Move SearchRoot(Board board, int depth)
+    private int getManhattanDist(Square s1, Square s2)
     {
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        Move[] moves = board.GetLegalMoves();
-        Move bestMove = moves[0];
-        float bestScore = float.MinValue;
-        for (int i = 0; i < moves.Length; i++)
-        {
-            board.MakeMove(moves[i]);
-            float val = -AlphaBetaNegamax(board, depth - 1, float.MinValue, -bestScore);
-            board.UndoMove(moves[i]);
-            if (val > bestScore)
-            {
-                bestScore = val;
-                bestMove = moves[i];
-            }
-        }
-        watch.Stop();
-        Console.WriteLine($"Took {watch.ElapsedMilliseconds,5} ms for depth {depth,2} - Best score: {bestScore}");
-        return bestMove;
-    }
-    private float AlphaBetaNegamax(Board board, int depth, float a, float b)
-    {
-        if (depth == 0)
-        {
-            return SearchCaptures(board, a, b);
-        }
-        Move[] allMoves = board.GetLegalMoves();
-        Move[] orderedMoves = allMoves.OrderByDescending(move => GetMoveScore(board, move)).ToArray();
-        for (int i = 0; i < orderedMoves.Length; i++)
-        {
-            board.MakeMove(orderedMoves[i]);
-            float val = -AlphaBetaNegamax(board, depth - 1, -b, -a);
-            board.UndoMove(orderedMoves[i]);
-            if (val >= b)
-            {
-                return b;
-            }
-            a = Math.Max(val, a);
-        }
-        return a;
+        return Math.Abs(s1.File - s2.File) + Math.Abs(s1.Rank - s2.Rank);
     }
 
-    private float SearchCaptures(Board board, float a, float b)
+    private int GetPieceScore(PieceType pieceType)
     {
-        float val = GetBoardScore(board);
-        if (val >= b)
-        {
-            return b;
-        }
-        a = Math.Max(val, a);
-
-        Move[] captureMoves = board.GetLegalMoves(true);
-        Move[] orderedCaptures = captureMoves.OrderByDescending(move => GetMoveScore(board, move)).ToArray();
-        for (int i = 0; i < orderedCaptures.Length; i++)
-        {
-            board.MakeMove(orderedCaptures[i]);
-            val = -SearchCaptures(board, -b, -a);
-            board.UndoMove(orderedCaptures[i]);
-            if (val >= b)
-            {
-                return b;
-            }
-            a = Math.Max(val, a);
-        }
-        return a;
+        // Piece values: null, pawn, knight, bishop, rook, queen, king
+        int[] pieceValues = { 0, 100, 300, 300, 500, 900, 10000 };
+        return pieceValues[(int)pieceType];
     }
 
-    private float GetMoveScore(Board board, Move move)
+    private int GetMoveScore(Board board, Move move)
     {
-        float score = 0;
+        int score = 0;
         if (move.IsCapture)
         {
             // Prioritize capturing higher value pieces with lower value pieces
@@ -96,32 +44,16 @@ public class MyBot : IChessBot
         return score;
     }
     // Score from the perspective of the player who's turn it is
-    private float GetBoardScore(Board board)
+    private int GetBoardScore(Board board, Boolean isWhite)
     {
-        if (boardScores.ContainsKey(board.ZobristKey))
-        {
-            return boardScores[board.ZobristKey];
-        }
-        float score = 0;
-        float whiteScore = GetBoardScore(board, true);
-        float blackScore = GetBoardScore(board, false);
-        float eval = whiteScore - blackScore;
-        int perspective = board.IsWhiteToMove ? 1 : -1;
-        score += perspective * eval;
-        boardScores[board.ZobristKey] = score;
-        return score;
-    }
-
-    private float GetBoardScore(Board board, Boolean isWhite)
-    {
-        float score = 0;
+        int score = 0;
         // Ger piece scores
         PieceList[] pieceLists = isWhite ? board.GetAllPieceLists().Take(6).ToArray() : board.GetAllPieceLists().Skip(6).ToArray();
         score += pieceLists.Sum(pieceList => GetPieceScore(pieceList.TypeOfPieceInList) * pieceList.Count);
 
         // Enemy King cornered score
         Square enemyKing = board.GetKingSquare(!isWhite);
-        score += 2 * (float)getDist(enemyKing, new Square(3, 3));
+        score += 2 * (int)getManhattanDist(enemyKing, new Square(3, 3));
 
         // Check if in check
         if (board.IsInCheck())
@@ -136,15 +68,89 @@ public class MyBot : IChessBot
         return score;
     }
 
-    private double getDist(Square s1, Square s2)
+    private int GetBoardScore(Board board)
     {
-        return Math.Sqrt(Math.Pow(s1.File - s2.File, 2) + Math.Pow(s1.Rank - s2.Rank, 2));
+        if (boardScores.ContainsKey(board.ZobristKey))
+        {
+            return boardScores[board.ZobristKey];
+        }
+        int score = 0;
+        int whiteScore = GetBoardScore(board, true);
+        int blackScore = GetBoardScore(board, false);
+        int eval = whiteScore - blackScore;
+        int perspective = board.IsWhiteToMove ? 1 : -1;
+        score += perspective * eval;
+        boardScores[board.ZobristKey] = score;
+        return score;
     }
 
-    private float GetPieceScore(PieceType pieceType)
+    // My understanding:
+    // - Alpha: The best score I think I can possibly get from this position
+    // - Beta: The best score my opponent will let me get.
+    // - If Alpha is > Beta, then further up the tree the opponent will have stopped me from taking this path.
+    private int Search(Board board, int a, int b, int depth, Timer timer, int ply)
     {
-        // Piece values: null, pawn, knight, bishop, rook, queen, king
-        int[] pieceValues = { 0, 100, 300, 300, 500, 900, 10000 };
-        return pieceValues[(int)pieceType];
+        bool quiescence = depth <= 0;
+        if (quiescence)
+        {
+            int score = GetBoardScore(board);
+            if (!useQuiescence) return score;
+            if (score > b) return b;
+            a = Math.Max(a, score);
+        }
+        Move[] orderedMoves = board.GetLegalMoves(quiescence).OrderByDescending(move => GetMoveScore(board, move)).ToArray();
+        for (int i = 0; i < orderedMoves.Length; i++)
+        {
+            // If out of time, return the max score. Since the caller is negating this, it will
+            // appear as the worst possible move and we will just take the best we found so far
+            if (IsOutOfTime(timer)) return int.MaxValue - 1;
+            if (quiescence)
+            {
+                quiescencePositionsSearched++;
+            }
+            else
+            {
+                rootPositionsSearched++;
+            }
+            board.MakeMove(orderedMoves[i]);
+            int score = -Search(board, -b, -a, depth - 1, timer, ply + 1);
+            board.UndoMove(orderedMoves[i]);
+            if (score > a)
+            {
+                if (ply == 0)
+                {
+                    bestRootMove = orderedMoves[i];
+                }
+                a = score;
+            }
+            if (a >= b) return b;
+        }
+        return a;
+    }
+
+    public Move Think(Board board, Timer timer)
+    {
+        Move bestRootMoveFromCompletedSearch = Move.NullMove;
+        for (int depth = 1; depth < 100; depth++)
+        {
+            bestRootMove = Move.NullMove;
+            rootPositionsSearched = 0;
+            quiescencePositionsSearched = 0;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            // If you take the negative on int.MinValue it wraps around, so add one 
+            int score = Search(board, int.MinValue + 1, int.MaxValue - 1, depth, timer, 0);
+            watch.Stop();
+            if (IsOutOfTime(timer) && bestRootMoveFromCompletedSearch != Move.NullMove)
+            {
+                break;
+            }
+            else
+            {
+                Console.WriteLine($"Depth {depth,2} - Took {watch.ElapsedMilliseconds,5} ms - Score: {score,11} - Best move: {bestRootMove} - Moves evaled: {rootPositionsSearched,8} - Quiescence evaled: {quiescencePositionsSearched,8}");
+                bestRootMoveFromCompletedSearch = bestRootMove != Move.NullMove ? bestRootMove : board.GetLegalMoves().First();
+            }
+        }
+        Console.WriteLine($"Final move: {bestRootMoveFromCompletedSearch} - ply {board.PlyCount}");
+        return bestRootMoveFromCompletedSearch;
     }
 }
