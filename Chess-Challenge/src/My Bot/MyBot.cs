@@ -11,7 +11,25 @@ public class MyBot : IChessBot
     bool useQuiescence = true;
     int rootPositionsSearched;
     int quiescencePositionsSearched;
+    int totalMemoHits;
 
+    enum memoType { Exact, Lower, Upper };
+
+    struct MemoEntry
+    {
+        public ulong key;
+        public int depth, score;
+        public memoType type;
+        public MemoEntry(ulong _key, int _depth, int _score, memoType _type)
+        {
+            key = _key;
+            depth = _depth;
+            score = _score;
+            type = _type;
+        }
+    }
+    const int numMemoEntries = (1 << 20);
+    MemoEntry[] memoTable = new MemoEntry[numMemoEntries];
     private bool IsOutOfTime(Timer timer)
     {
         return timer.MillisecondsElapsedThisTurn >= timer.MillisecondsRemaining / 30;
@@ -90,6 +108,19 @@ public class MyBot : IChessBot
     // - If Alpha is > Beta, then further up the tree the opponent will have stopped me from taking this path.
     private int Search(Board board, int a, int b, int depth, Timer timer, int ply)
     {
+        ulong zob = board.ZobristKey;
+        int origAlpha = a;
+
+        MemoEntry memo = memoTable[zob % numMemoEntries];
+        if (memo.key == zob && memo.depth >= depth)
+        {
+            totalMemoHits++;
+            if (memo.type == memoType.Exact) return memo.score;
+            if (memo.type == memoType.Lower && memo.score > b) return b;
+            if (memo.type == memoType.Upper && memo.score < a) return a;
+            totalMemoHits--;
+        }
+
         bool quiescence = depth <= 0;
         if (quiescence)
         {
@@ -125,12 +156,18 @@ public class MyBot : IChessBot
             }
             if (a >= b) return b;
         }
+        memoTable[zob % numMemoEntries] = new MemoEntry(
+            zob,
+            depth,
+            a,
+            a >= b ? memoType.Lower : a > origAlpha ? memoType.Exact : memoType.Upper);
         return a;
     }
 
     public Move Think(Board board, Timer timer)
     {
         Move bestRootMoveFromCompletedSearch = Move.NullMove;
+        totalMemoHits = 0;
         for (int depth = 1; depth < 100; depth++)
         {
             bestRootMove = Move.NullMove;
@@ -150,7 +187,7 @@ public class MyBot : IChessBot
                 bestRootMoveFromCompletedSearch = bestRootMove != Move.NullMove ? bestRootMove : board.GetLegalMoves().First();
             }
         }
-        Console.WriteLine($"Final move: {bestRootMoveFromCompletedSearch} - ply {board.PlyCount}");
+        Console.WriteLine($"Final move: {bestRootMoveFromCompletedSearch} - ply {board.PlyCount} - Memo hits {totalMemoHits}");
         return bestRootMoveFromCompletedSearch;
     }
 }
